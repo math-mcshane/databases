@@ -67,7 +67,7 @@ ggplot2::theme_set(ggplot2::theme_bw())
 \newcommand{\ansbegin}{ \color{blue}\smallbreak\vspace{-8pt}\hrulefill \smallbreak\noindent}
 \newcommand{\ansend}{\smallbreak\vspace{-8pt}\hrulefill \smallbreak\vspace{-8pt} \color{black} }
 
-\Large \textbf{FOR THE ENTIRETY OF THIS ASSIGNMENT, DO NOT LOAD A PACKAGE.}  \normalsize _These are the only packages you should need to get started:_.
+<!-- \Large \textbf{FOR THE ENTIRETY OF THIS ASSIGNMENT, DO NOT LOAD A PACKAGE.}  \normalsize _These are the only packages you should need to get started:_. -->
 
 ```{r libs, message = FALSE}
 library(tidyverse)
@@ -888,4 +888,828 @@ duckplyr::duckplyr_df_from_parquet("delay-by-month.parquet") |>
 
 
 ```
+
+
+## Question 22
+
+```{r}
+library(DBI)
+library(dplyr)
+
+### DuckDB + SQL showcase #######################################################
+
+# Create data -------------------------------------------------------------------
+
+arrow::write_parquet(nycflights13::flights, "flights.parquet")
+con_memory <- dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+tbl <- duckdb::tbl_file(con_memory, "flights.parquet")
+
+# Application: DBI <=> dbplyr and pivoting -------------------------------------------------
+
+daily_flights_by_dest <-
+  tbl |>
+  count(year, month, day, dest)
+
+daily_flights_by_dest
+
+daily_flights_by_dest_sql <-
+  daily_flights_by_dest |>
+  dbplyr::sql_render()
+daily_flights_by_dest_sql
+
+pivot_sql <- paste0(
+  "PIVOT (", daily_flights_by_dest_sql, ") ON dest USING SUM(n)"
+)
+
+as_tibble(dbGetQuery(con_memory, pivot_sql))
+
+system.time(
+  as_tibble(dbGetQuery(con_memory, pivot_sql))
+)
+
+system.time(
+  nycflights13::flights |>
+    count(year, month, day, dest) |>
+    tidyr::pivot_wider(names_from = dest, values_from = n, values_fill = 0)
+)
+
+write_pivot_sql <- paste0(
+  "COPY (", pivot_sql, ") TO 'pivot.parquet' (FORMAT PARQUET)"
+)
+dbExecute(con_memory, write_pivot_sql)
+
+q_unpivot_dyn <-
+  "(SELECT * FROM (
+   UNPIVOT 'pivot.parquet'
+   ON COLUMNS(* EXCLUDE (year, month, day))
+   INTO NAME dest VALUE n))"
+tbl(con_memory, from = q_unpivot_dyn)
+
+```
+
+
+
+## Question 23
+
+```{r}
+library(DBI)
+library(duckdb)
+library(dplyr)
+library(dbplyr)
+
+### Database dumps #############################################################
+
+# Connection -------------------------------------------------------------------
+
+if (fs::file_exists("flights.duckdb")) {
+  fs::file_delete("flights.duckdb")
+}
+
+con_rw <- dbConnect(duckdb::duckdb(), dbdir = "flights.duckdb")
+flights_duckdb <- copy_to(
+  con_rw,
+  nycflights13::flights,
+  name = "flights",
+  temporary = FALSE
+)
+dbDisconnect(con_rw)
+
+# Exploration ----
+
+con <- dbConnect(
+  duckdb::duckdb(),
+  dbdir = "flights.duckdb",
+  read_only = TRUE
+)
+flights_duckdb <- tbl(con, "flights")
+
+# Method 1: via local data frame ----
+
+flights_duckdb |>
+  filter(month == 1) |>
+  collect() |>
+  duckplyr::df_to_parquet("flights-jan.parquet")
+
+flights_duckdb |>
+  collect() |>
+  duckplyr::df_to_parquet("flights.parquet")
+
+# Method 2: via DBI ----
+
+sql_jan <- flights_duckdb |>
+  filter(month == 1) |>
+  dbplyr::sql_render()
+
+fs::dir_create("flights-arrow")
+
+res <- dbSendQuery(con, sql_jan)
+i <- 0
+repeat {
+  df <- dbFetch(res, n = 10000)
+  if (nrow(df) == 0) break
+  path <- fs::path("flights-arrow", sprintf("part-%05d.parquet", i))
+  duckplyr::df_to_parquet(df, path)
+  i <- i + 1
+  message("Written ", nrow(df), " rows to ", path)
+}
+dbClearResult(res)
+
+fs::dir_tree("flights-arrow/")
+
+# Method 3: via parquetize ----
+
+parquetize::dbi_to_parquet(
+  con,
+  sql_jan,
+  "flights-parquetized",
+  max_rows = 10000
+)
+
+fs::dir_tree("flights-parquetized/")
+
+# Method 4: via DBI and arrow ----
+
+
+
+# con_adbi <- dbConnect(
+#   adbi::adbi(duckdb::duckdb_adbc()),
+#   path = "flights.duckdb"
+# )
+# 
+# sql <- "SELECT * FROM flights"
+# 
+# res <- dbSendQueryArrow(con_adbi, sql)
+# stream <- dbFetchArrow(res)
+# arrow::write_dataset(
+#   arrow::as_record_batch_reader(stream),
+#   "flights-adbi/"
+# )
+# dbClearResult(res)
+
+# Partitions ----
+
+nycflights13::flights |>
+  arrow::write_dataset(
+    "flights-part-arrow/",
+    partitioning = "month"
+  )
+
+fs::dir_tree("flights-part-arrow/")
+
+# Adding partitions to a dataset ----
+
+write_month <- function(month) {
+  sql <- flights_duckdb |>
+    filter(month == !!month) |>
+    dbplyr::sql_render()
+
+  dir <- fs::path(
+    "flights-part-manual",
+    sprintf("month=%d", month)
+  )
+  fs::dir_create(dir)
+
+  df <- dbGetQuery(con, sql)
+  duckplyr::df_to_parquet(
+    df,
+    fs::path(dir, "part-0.parquet")
+  )
+}
+
+write_month(1)
+write_month(2)
+write_month(3)
+
+fs::dir_tree("flights-part-manual")
+
+# Exercises -------------------------------------------------------------------------
+
+
+
+# 1. Write code to create a partitioned dataset with the `flights` table,
+#    partitioned by `origin`.
+#        - Hint: The dataset only contains flights departing from New York City airports.
+
+```
+
+
+## Question 31
+
+### 
+
+```{r}
+# attach relevant packages
+library(tidyverse)
+library(DBI)
+
+### Extract, Transform, Load ###################################################
+
+# Extract: Raw data ------------------------------------------------------------
+
+pixar_films_raw <- pixarfilms::pixar_films
+pixar_films_raw
+
+# Transform: Fix column type, extract sequel column ----------------------------
+
+pixar_films_clean <-
+  pixar_films_raw |>
+  separate(film, into = c("franchise", "sequel"),
+    sep = " (?=[0-9]+$)", fill = "right", remove = FALSE
+  ) |>
+  mutate(across(c(number, sequel), as.integer)) |>
+  mutate(.by = franchise, sequel = if_else(is.na(sequel) & n() > 1, 1L, sequel))
+pixar_films_clean
+
+# Create target database -------------------------------------------------------
+
+if (fs::file_exists("pixar.duckdb")) {
+  fs::file_delete("pixar.duckdb")
+}
+
+# Load: Write table to the database --------------------------------------------
+
+con_rw <- dbConnect(duckdb::duckdb(), dbdir = "pixar.duckdb")
+con_rw
+
+if (!dbExistsTable(con_rw, "pixar_films")) {
+  dbWriteTable(con_rw, "pixar_films", pixar_films_clean)
+  dbExecute(con_rw, "CREATE UNIQUE INDEX pixarfilms_pk ON pixar_films (film)")
+}
+
+dbDisconnect(con_rw)
+
+# Reload: Write table to the database if the table exists ----------------------------------
+
+con_rw <- dbConnect(duckdb::duckdb(), dbdir = "pixar.duckdb")
+con_rw
+
+dbExecute(con_rw, "TRUNCATE TABLE pixar_films")
+dbAppendTable(con_rw, "pixar_films", pixar_films_clean)
+
+dbDisconnect(con_rw)
+
+# Consume: share the file, open it ---------------------------------------------
+
+con <- dbConnect(duckdb::duckdb(), dbdir = "pixar.duckdb")
+my_pixar_films <- tbl(con, "pixar_films")
+my_pixar_films
+```
+
+
+```{r}
+# Exercises --------------------------------------------------------------------
+
+# 1. Adapt the ETL workflow to convert the `run_time` column to a duration.
+
+pixar_films_clean <-
+  pixar_films_clean |>
+  mutate(run_time = hms::hms(minutes = run_time))
+pixar_films_clean
+
+#    - Hint: Use `mutate()` with `hms::hms(minutes = ...)` .
+# 2. Re-run the workflow.
+
+
+```
+
+## Question 32
+
+```{r}
+# attach relevant packages
+library(DBI)
+library(dm)
+
+### Remote databases ###################################################
+
+# Connect --------------------------------------------------------------
+
+con <- dbConnect(
+  RMariaDB::MariaDB(),
+  dbname = "CORA",
+  username = "guest",
+  password = "ctu-relational",
+  host = "relational.fel.cvut.cz"
+)
+
+# List tables ----------------------------------------------------------
+
+dbListTables(con)
+
+# Use dm for many tables -----------------------------------------------
+
+dm <- dm_from_con(con)
+
+dm
+
+dm |>
+  dm_nrow()
+
+dm$paper
+
+dm |>
+  dm_get_tables()
+
+```
+
+
+
+
+## Question 33
+
+### Questions
+
+```{r}
+# attach relevant packages
+library(tidyverse)
+library(dm)
+
+# display chosen presentation (it might take a few seconds to appear)
+slide_viewer <- function(path) {
+  tmp <- tempfile(fileext = ".html")
+  file.copy(path, tmp)
+  rstudioapi::viewer(tmp)
+}
+# slide_viewer("materials/databases.html")
+
+### Data models ################################################################
+
+# Data model objects -----
+
+pixar_dm <- dm_pixarfilms()
+pixar_dm
+
+pixar_dm |>
+  dm_draw()
+
+names(pixar_dm)
+
+pixar_dm$pixar_films
+pixar_dm$academy
+
+pixar_dm |>
+  dm_get_tables()
+
+# Showcase: wrapping all tables in a data model:
+pixar_films_wrapped <-
+  pixar_dm |>
+  dm_wrap_tbl(pixar_films) |>
+  pull_tbl(pixar_films)
+
+pixar_films_wrapped
+pixar_films_wrapped$academy[1:2]
+
+
+### Keys, constraints, normalization ###########################################
+
+# Data model object ------
+
+pixar_dm <- dm_pixarfilms()
+
+# Primary keys ----
+
+any(duplicated(pixar_dm$pixar_films$film))
+check_key(pixar_dm$pixar_films, film)
+any(duplicated(pixar_dm$academy[c("film", "award_type")]))
+check_key(pixar_dm$academy, film, award_type)
+try(
+  check_key(pixar_dm$academy, film)
+)
+
+# Foreign keys ----
+
+all(pixar_dm$academy$film %in% pixar_dm$pixar_films$film)
+check_subset(pixar_dm$academy, film, pixar_dm$pixar_films, film)
+try(
+  check_subset(pixar_dm$pixar_films, film, pixar_dm$academy, film)
+)
+
+# Constraints ----
+
+pixar_dm |>
+  dm_examine_constraints()
+
+dm_pixarfilms(consistent = TRUE) |>
+  dm_examine_constraints()
+
+dm_nycflights13() |>
+  dm_examine_constraints()
+
+# Joins ----
+
+pixar_dm |>
+  dm_zoom_to(academy)
+
+# With zooming:
+pixar_dm |>
+  dm_zoom_to(academy) |>
+  left_join(pixar_films, select = c(film, release_date))
+
+# With flattening:
+pixar_dm |>
+  dm_flatten_to_tbl(academy)
+
+dm_nycflights13() |>
+  dm_select(weather, -year, -month, -day, -hour) |>
+  dm_flatten_to_tbl(flights)
+
+# Joining is easy, leave the tables separate for as long as possible!
+
+# Exercises --------------------------------------------------------------------
+
+venue <- tibble(
+  venue_id = character(),
+  floor = character(),
+  capacity = integer(),
+)
+
+event <- tibble(
+  event_id = character(),
+  event_name = character(),
+  event_type = character(),
+  venue_id = character(),
+  date_start = vctrs::new_datetime(),
+  date_end = vctrs::new_datetime(),
+)
+
+attendee <- tibble(
+  attendee_name = character(),
+  favorite_package = character(),
+)
+
+speaker <- tibble(
+  speaker_name = character(),
+  event_id = character(),
+)
+
+event_attendee <- tibble(
+  event_id = character(),
+  attendee_name = character(),
+)
+
+```
+
+
+
+### Solutions
+
+```{r}
+library(tibble)
+library(dm)
+library(DBI)
+
+# 1. Explore <https://dm.cynkra.com> and the built-in data models
+#     `dm_nycflights13()` and `dm_pixarfilms()`
+
+dm_nycflights13() |>
+  dm_draw()
+
+dm_pixarfilms() |>
+  dm_draw(view_type = "all")
+
+# 2.
+
+venue <- tibble(
+  venue_id = character(),
+  floor = character(),
+  capacity = integer(),
+)
+
+event <- tibble(
+  event_id = character(),
+  event_name = character(),
+  event_type = character(),
+  venue_id = character(),
+  date_start = vctrs::new_datetime(),
+  date_end = vctrs::new_datetime(),
+)
+
+attendee <- tibble(
+  attendee_name = character(),
+  favorite_package = character(),
+)
+
+speaker <- tibble(
+  speaker_name = character(),
+  event_id = character(),
+)
+
+event_attendee <- tibble(
+  event_id = character(),
+  attendee_name = character(),
+)
+
+# 2. Given the table structure above, create a dm object setting suitable
+#     PK and FK relationships and unique keys.
+#     Each speaker is an attendee, each event has a venue and exactly one speaker.
+#     The helper table event_attendees matches attendees to events.
+#     - Hint: Use the `dm()` function to create a dm object from scratch
+#     - Hint: Use a unique key on `speakers$event_name`
+dm_conf_target <-
+  dm(venue, event, attendee, speaker, event_attendee) |>
+  dm_add_pk(venue, venue_id) |>
+  dm_add_pk(event, event_id) |>
+  dm_add_pk(speaker, speaker_name) |>
+  dm_add_pk(attendee, attendee_name) |>
+  dm_add_fk(speaker, event_id, event) |>
+  dm_add_fk(event, venue_id, venue) |>
+  dm_add_fk(speaker, speaker_name, attendee, attendee_name) |>
+  dm_add_fk(event_attendee, event_id, event) |>
+  dm_add_fk(event_attendee, attendee_name, attendee) |>
+  dm_add_uk(speaker, event_id)
+
+# 3. Draw the dm object
+dm_conf_target |>
+  dm_draw()
+
+# 4. Color the tables (optional)
+dm_conf_target |>
+  dm_set_colors(
+    blue = event,
+    red = venue,
+    green3 = speaker,
+    seagreen = attendee,
+  ) |>
+  dm_draw()
+
+# 5. Deploy the data model to a DuckDB database
+con_rw <- dbConnect(duckdb::duckdb(), "posit-conf.duckdb")
+dm_conf_target <- copy_dm_to(con_rw, dm_conf_target, temporary = FALSE)
+
+dbListTables(con_rw)
+
+dm_conf_target |>
+  dm_get_tables()
+
+dbDisconnect(con_rw)
+
+```
+
+
+## Question 40 (backup)
+
+###
+
+```{r}
+library(DBI)
+library(duckdb)
+library(dplyr)
+library(dm)
+
+fs::dir_create("sec")
+
+# https://www.sec.gov/files/structureddata/data/form-d-data-sets/2023q4_d.zip
+
+sec_paths <- fs::dir_ls("sec")
+
+if (FALSE) {
+  purrr::walk(sec_paths, ~ unzip(.x, exdir = "sec-unzipped"))
+}
+
+if (fs::file_exists("formd.duckdb")) {
+  fs::file_delete("formd.duckdb")
+}
+
+# Form D ------------------------------------------------------------------------
+
+duckdb_con <- dbConnect(duckdb())
+
+form_d <- duckdb::tbl_file(
+  duckdb_con,
+  "sec-unzipped/2023Q4_d/FORMDSUBMISSION.tsv"
+)
+
+# explore column names
+try(names(form_d))
+colnames(form_d) |>
+  writeLines()
+
+# duplicates check
+form_d |>
+  rename_with(tolower) |>
+  summarise(.by = accessionnumber, n = n()) |>
+  filter(n > 1) |>
+  count()
+
+# Issuers ----------------------------------------------------------------------
+
+issuers <- duckdb::tbl_file(
+  duckdb_con,
+  "sec-unzipped/2023Q4_d/ISSUERS.tsv"
+)
+
+# explore column names
+colnames(issuers) |>
+  writeLines()
+
+# duplicates check
+issuers |>
+  rename_with(tolower) |>
+  summarise(.by = accessionnumber, n = n()) |>
+  filter(n > 1) |>
+  count()
+
+issuers |>
+  rename_with(tolower) |>
+  summarise(.by = c(accessionnumber, issuer_seq_key), n = n()) |>
+  filter(n > 1) |>
+  count()
+
+
+# Offering ---------------------------------------------------------------------
+
+offering <- duckdb::tbl_file(
+  duckdb_con,
+  "sec-unzipped/2023Q4_d/OFFERING.tsv"
+)
+
+# explore column names
+colnames(offering) |>
+  writeLines()
+
+# duplicates check
+offering |>
+  rename_with(tolower) |>
+  summarise(.by = accessionnumber, n = n()) |>
+  filter(n > 1) |>
+  count()
+
+# Recipients -------------------------------------------------------------------
+
+recipients <- duckdb::tbl_file(
+  duckdb_con,
+  "sec-unzipped/2023Q4_d/RECIPIENTS.tsv"
+)
+
+# explore column names
+colnames(recipients) |>
+  writeLines()
+
+recipients |>
+  rename_with(tolower) |>
+  summarise(.by = accessionnumber, n = n()) |>
+  filter(n > 1) |>
+  count()
+
+recipients |>
+  rename_with(tolower) |>
+  summarise(.by = c(accessionnumber, recipient_seq_key), n = n()) |>
+  filter(n > 1) |>
+  count()
+
+# dm ---------------------------------------------------------------------------
+
+dm_formd_set_pk_fk <- function(dm) {
+
+  stopifnot(is_dm(dm))
+
+  dm |>
+    dm_add_pk(form_d, ACCESSIONNUMBER, check = TRUE) |>
+    dm_add_pk(issuers, c(ACCESSIONNUMBER, ISSUER_SEQ_KEY)) |>
+    dm_add_pk(offering, ACCESSIONNUMBER) |>
+    dm_add_pk(recipients, c(ACCESSIONNUMBER, RECIPIENT_SEQ_KEY)) |>
+    dm_add_fk(issuers, ACCESSIONNUMBER, form_d) |>
+    dm_add_fk(offering, ACCESSIONNUMBER, form_d) |>
+    dm_add_fk(recipients, ACCESSIONNUMBER, form_d)
+
+}
+
+formd_dm_keys <-
+  dm(form_d, issuers, offering, recipients) |>
+  dm_formd_set_pk_fk()
+
+dm_draw(formd_dm_keys)
+
+dm_examine_constraints(formd_dm_keys)
+
+# Analyze ----------------------------------------------------------------------
+
+base_dat <-
+  formd_dm_keys |>
+  dm_flatten_to_tbl(.start = issuers) |> # help(dm_flatten_to_tbl)
+  rename_with(tolower) |>
+  left_join(
+    rename_with(pull_tbl(formd_dm_keys, offering), tolower),
+    join_by(accessionnumber)
+  ) |>
+  mutate(
+    filing_date = sql("STRPTIME(filing_date, '%d-%b-%Y')")
+  ) |>
+  mutate(
+    filing_date = sql("CAST(filing_date AS DATE)")
+  ) |>
+  transmute(
+    year = lubridate::year(filing_date),
+    month = lubridate::month(filing_date),
+    accessionnumber,
+    entityname,
+    stateorcountry,
+    stateorcountrydescription,
+    entitytype,
+    federalexemptions_items_list,
+    submissiontype,
+    totalamountsold,
+    totalofferingamount = as.numeric(
+      sql("nullif(totalofferingamount, 'Indefinite')")
+    )
+  )
+
+# submissiontype per month ----
+
+type_dat <-
+  base_dat |>
+  count(year, month, submissiontype) |>
+  collect() |>
+  mutate(filing_date = lubridate::make_date(year, month)) |>
+  arrange(year, month)
+
+library(ggplot2)
+type_dat |>
+  mutate(dte = lubridate::make_date(year, month)) |>
+  ggplot(aes(dte, n, fill = submissiontype)) +
+  geom_col(position = "dodge") +
+  theme_minimal() +
+  labs(title = "Form D submission Q1")
+
+# amount sold per state ----
+base_dat |>
+  summarise(
+    .by = stateorcountrydescription,
+    tot_sold = sum(totalamountsold, na.rm = TRUE),
+    tot_offered = sum(totalofferingamount, na.rm = TRUE)
+  ) |>
+  filter(tot_sold > 0) |>
+  collect() |>
+  mutate(
+    stateorcountrydescription = forcats::fct_reorder(
+      stateorcountrydescription,
+      tot_sold
+    )
+  ) |>
+  ggplot(aes(stateorcountrydescription, tot_sold)) +
+  geom_col() +
+  coord_flip() +
+  theme_minimal()
+
+
+# rank ten best raising capital ----
+base_dat |>
+  dbplyr::window_order(totalamountsold) |>
+  mutate(row_num = row_number()) |>
+  filter(between(row_num, max(row_num) - 9L, max(row_num))) |>
+  collect() |>
+  arrange(desc(totalamountsold)) |>
+  select(entityname, totalamountsold)
+
+# Multi ------------------------------------------------------------------------
+
+q_form_d <-
+  "CREATE OR REPLACE TABLE form_d AS
+   SELECT *
+   FROM read_csv(
+          'sec-unzipped/*/FORMDSUBMISSION.tsv',
+          types={'FILING_DATE': 'VARCHAR'}
+        );
+  "
+
+dbExecute(duckdb_con, q_form_d)
+
+q_issuers <-
+  "CREATE OR REPLACE TABLE issuers AS
+   SELECT *
+   FROM read_csv(
+          'sec-unzipped/*/ISSUERS.tsv'
+        );
+  "
+
+dbExecute(duckdb_con, q_issuers)
+
+q_offering <-
+  "CREATE OR REPLACE TABLE offering AS
+   SELECT *
+   FROM read_csv('sec-unzipped/*/OFFERING.tsv');
+  "
+
+dbExecute(duckdb_con, q_offering)
+
+q_recipients <-
+  "CREATE OR REPLACE TABLE recipients AS
+   SELECT *
+   FROM read_csv('sec-unzipped/*/RECIPIENTS.tsv');
+  "
+
+dbExecute(duckdb_con, q_recipients)
+
+stopifnot(length(dbListTables(duckdb_con)) == 4L)
+
+formd_dm <-
+  dm::dm_from_con(duckdb_con) |>
+  dm_formd_set_pk_fk()
+
+dbDisconnect(duckdb_con)
+
+```
+
+
+
+
 
