@@ -18,7 +18,7 @@ format:
       text: |
         \usepackage{fancyhdr, bm}
         \addtokomafont{disposition}{\rmfamily}
-        \setcounter{section}{4}
+        \setcounter{section}{1}
         \lhead{ STAT2/37815 \\ Dr. McShane }
         \rhead{ YOUR NAME HERE \\ Due May 9th at 5pm }
         \chead{\textbf{\Large Homework \# 4}}
@@ -90,7 +90,7 @@ library(parquetize)
 <!-- NEW PROBLEM ----------------------------------------------->
 
 
-# Question 10
+## Question 10
 
 ## Setup
 
@@ -233,3 +233,659 @@ con
 
 
 <!-- NEW PROBLEM ----------------------------------------------->
+
+## Question 12
+
+## Setup
+
+```{r}
+### Downsizing on the database #################################################
+
+# Connection -------------------------------------------------------------------
+
+con <- DBI::dbConnect(duckdb::duckdb())
+dm::copy_dm_to(con, dm::dm_pixarfilms(), set_key_constraints = FALSE, temporary = FALSE)
+
+# Lazy tables ------------------------------------------------------------------
+
+pixar_films <- tbl(con, "pixar_films")
+pixar_films
+
+# Get all data ----
+
+df_pixar_films <-
+  pixar_films |>
+  collect()
+df_pixar_films
+
+# Get first 10 rows
+pixar_films |>
+  collect(n = 10)
+
+# Get first 10 rows
+pixar_films |>
+  slice_sample(n = 10)
+
+# Why does this work? Show_query helps
+pixar_films |> 
+  head() |>
+  show_query()
+
+# setting a seed in R session has no effect on database. 
+# Thus, we will need to set a seed in the database
+dbExecute(con, "SELECT setseed(.42)")
+
+pixar_films |>
+  slice_sample(n = 10) |> 
+  show_query()
+```
+
+
+```{r}
+# Projection (column selection)  -----------------------------------------------
+
+pixar_films |>
+  select(1:3)
+
+# Computations happens on the database!
+pixar_films |>
+  select(1:3) |>
+  show_query()
+
+# Bring the data into the R session
+df_pixar_films_3 <-
+  pixar_films |>
+  select(1:3) |>
+  collect()
+df_pixar_films_3
+
+# Immutable data: original data unchanged
+pixar_films |>
+  collect()
+
+# regex can work 
+pixar_films |> 
+  filter(grepl("^Toy ", film)) |> 
+  collect()
+
+# Hypothetically, if it didn't, just modify the data frame in R
+pixar_films |> 
+  collect() |>
+  filter(grepl("^Toy ", film))
+
+```
+
+
+```{r}
+# Filtering (row selection)  ---------------------------------------------------
+
+pixar_films |>
+  filter(release_date >= "2020-01-01")
+
+# Computations happens on the database!
+pixar_films |>
+  filter(release_date >= "2020-01-01") |>
+  show_query()
+
+# Bring the data into the R session
+df_pixar_films_202x <-
+  pixar_films |>
+  filter(release_date >= "2020-01-01") |>
+  collect()
+df_pixar_films_202x
+
+# Immutable data: original data unchanged
+pixar_films |>
+  collect()
+```
+
+### Exercises 
+
+```{r}
+# Downsizing on the database: Exercises ----------------------------------------
+
+# `select()` -------------------------------------------------------------------
+
+pixar_films
+
+# *  Find several ways to select the 3 first columns
+## base R
+pixar_films |>
+  collect() %>%
+  .[, 1:3]
+## dplyr
+pixar_films |> 
+  select(1:3)
+## dplyr ugly
+pixar_films |> 
+  select(!4:ncol(pixar_films))
+## dplyr need to know column names
+pixar_films |> 
+  select(number:release_date)
+
+
+# *  What happens if you include the name of a variable multiple times in a `select()` call?
+pixar_films |> 
+  select(number, number)
+
+# *  Select all columns that contain underscores (use `contains()`)
+pixar_films |> 
+  select(contains("_"))
+
+# *  Use `all_of()` to select 2 columns of your choice
+columns_of_interest = pixar_films |> colnames() |> head(n = 2)
+pixar_films |> 
+  select(columns_of_interest)
+pixar_films |> 
+  select(all_of(columns_of_interest))
+pixar_films |> 
+  select(!!columns_of_interest)
+
+
+# `filter()` -------------------------------------------------------------------
+
+pixar_films
+
+# Find all films that
+# 1. Are rated "PG"
+
+filter(pixar_films, film_rating == "PG")
+
+# 2. Had a run time below 95
+
+filter(pixar_films, run_time < 95)
+
+# 3. Had a rating of "N/A" or "Not Rated"
+
+filter(pixar_films, film_rating %in% c("N/A", "Not Rated"))
+
+# 4. Were released after and including year 2020
+
+filter(pixar_films, release_date >= as.Date("2020-01-01"))
+
+# 5. Have a missing name (`film` column) or `run_time`
+
+filter(pixar_films, is.na(film) | is.na(run_time))
+
+# 6. Are a first sequel (the name ends with "2", as in "Toy Story 2")
+#     - Hint: Bring the data into the R session before filtering
+
+filter(collect(pixar_films), grepl("2$", film))
+
+# `count()`, `summarize()`, `group_by()`, `ungroup()` --------------------------
+
+pixar_films
+
+# 1. How many films are stored in the table?
+
+count(pixar_films)
+
+# 2. How many films released after 2005 are stored in the table?
+
+filter(pixar_films, release_date >= as.Date("2006-01-01")) |>
+  count()
+
+# 3. What is the total run time of all films?
+#     - Hint: Use `summarize(sum(...))`, watch out for the warning
+
+summarize(pixar_films, total_time = sum(run_time, na.rm = TRUE))
+
+# 4. What is the total run time of all films, per rating?
+#     - Hint: Use `group_by()` or `.by`
+
+pixar_films |>
+  summarize(.by = film_rating, total_time = sum(run_time, na.rm = TRUE))
+
+
+```
+
+
+## Question 13
+
+```{r}
+### Downsizing on the database #################################################
+
+# Connection -------------------------------------------------------------------
+
+con <- DBI::dbConnect(duckdb::duckdb())
+dm::copy_dm_to(
+  con, 
+  dm::dm_pixarfilms(), 
+  set_key_constraints = FALSE, 
+  temporary = FALSE
+)
+
+# Lazy tables ------------------------------------------------------------------
+
+pixar_films <- tbl(con, "pixar_films")
+pixar_films
+```
+
+
+```{r}
+# Aggregation ------------------------------------------------------------------
+
+pixar_films |>
+  summarize(
+    .by = film_rating, 
+    n = n()
+  )
+
+# Shortcut
+pixar_films |>
+  count(film_rating)
+
+# Computations happens on the database!
+pixar_films |>
+  count(film_rating) |>
+  show_query()
+
+# Bring the data into the R session
+df_pixar_films_by_rating <-
+  pixar_films |>
+  count(film_rating) |>
+  collect()
+df_pixar_films_by_rating
+
+# Immutable data: original data unchanged
+pixar_films |>
+  collect()
+```
+
+
+```{r}
+# Second lazy table --------------------------------------------------------------
+
+academy <- tbl(con, "academy")
+
+academy
+academy |>
+  count(status)
+```
+
+
+```{r}
+# Left join ------
+
+academy |>
+  left_join(pixar_films)
+
+academy |>
+  left_join(pixar_films, join_by(film))
+
+academy |>
+  left_join(pixar_films, join_by(film)) |>
+  show_query()
+```
+
+
+```{r}
+# Join with prior computation ------
+
+academy_won <-
+  academy |>
+  filter(status == "Won") |>
+  count(film, name = "n_won")
+academy_won
+
+pixar_films |>
+  left_join(academy_won, join_by(film))
+
+academy_won |>
+  right_join(pixar_films, join_by(film)) |>
+  arrange(release_date)
+
+academy_won |>
+  right_join(pixar_films, join_by(film)) |>
+  mutate(n_won = coalesce(n_won, 0L)) |>
+  arrange(release_date)
+
+
+# important point: this SQL statement is not necessarily what we would want to
+# write by hand; if putting into production, would want to simplify SQL
+pixar_films |>
+  left_join(academy_won, join_by(film)) |>
+  mutate(n_won = coalesce(n_won, 0L)) |>
+  arrange(release_date) |>
+  show_query()
+```
+
+
+```{r}
+# Caveat: tables must be on the same source ------------------------------------
+
+try(
+  academy |>
+    left_join(pixarfilms::pixar_films, join_by(film))
+)
+
+academy |>
+  left_join(pixarfilms::pixar_films, join_by(film), copy = TRUE)
+
+academy |>
+  left_join(pixarfilms::pixar_films, join_by(film), copy = TRUE) |>
+  show_query()
+
+try(
+  pixarfilms::academy |>
+    left_join(pixar_films, join_by(film))
+)
+
+pixarfilms::academy |>
+  left_join(pixar_films, join_by(film), copy = TRUE)
+
+pixar_films_db <-
+  copy_to(con, pixarfilms::pixar_films)
+
+academy |>
+  left_join(pixar_films_db, join_by(film))
+```
+
+
+```{r}
+# Downsizing on the database: Exercises ----------------------------------------
+
+# `count()`, `summarize()`, `group_by()`, `ungroup()` --------------------------
+
+pixar_films
+
+# 1. How many films are stored in the table?
+
+pixar_films |> 
+  count()
+
+# 2. How many films released after 2005 are stored in the table?
+## their solution
+pixar_films |> 
+  filter(release_date >= as.Date("2006-01-01"))
+## better solution
+pixar_films |> 
+  filter(year(release_date) > 2005)
+
+# 3. What is the total run time of all films?
+#     - Hint: Use `summarize(sum(...))`, watch out for the warning
+
+pixar_films |> 
+  summarize(total_run_time = sum(run_time))
+
+
+# 4. What is the total run time of all films, per rating?
+#     - Hint: Use `group_by()` or `.by`
+
+pixar_films |> 
+  summarize(total_run_time = sum(run_time), .by = film_rating)
+```
+
+
+```{r}
+# `left_join()` --------------------------------------------------------------------
+
+pixar_films |>
+  left_join(academy, join_by(film))
+
+# 1. How many rows does the join between `academy` and `pixar_films` contain?
+#    Try to find out without loading all the data into memory. Explain.
+
+left_join(pixar_films, academy, join_by(film)) |>
+  count()
+
+count(academy)
+
+# 2. Which films are not yet listed in the `academy` table? What does the
+#    resulting SQL query look like?
+#    - Hint: Use `anti_join()`
+
+anti_join(pixar_films, academy, join_by(film))
+
+# 3. Plot a bar chart with the number of awards won and nominated per year.
+#    Compute as much as possible on the database.
+#    - Hint: "Long form" or "wide form"?
+
+
+academy_won_nominated <-
+  academy |>
+  filter(status %in% c("Nominated", "Won")) |>
+  select(film, status)
+
+per_year_won_nominated <-
+  pixar_films |>
+  transmute(film, year = year(release_date)) |>
+  inner_join(academy_won_nominated, join_by(film)) |>
+  count(year, status) |>
+  collect()
+per_year_won_nominated
+
+ggplot(per_year_won_nominated, aes(x = year, y = n, fill = status)) +
+  geom_col()
+
+```
+
+## Question 21
+
+### 
+
+```{r}
+library(DBI)
+library(tidyverse)
+requireNamespace("duckplyr")
+```
+
+
+```{r}
+### Working with database dumps #################################################
+
+# Create data -------------------------------------------------------------------
+
+arrow::write_parquet(nycflights13::flights, "flights.parquet")
+
+fs::file_size("flights.parquet")
+object.size(nycflights13::flights)
+
+# Processing the local data ----
+
+# Read as tibble ----
+
+df <- arrow::read_parquet("flights.parquet")
+df
+
+# Read as Arrow dataset ----
+
+ds <- arrow::open_dataset("flights.parquet")
+ds
+ds |>
+  count(year, month, day) |>
+  collect()
+```
+
+
+```{r}
+# Register as duckdb lazy table ----
+
+con_memory <- dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+
+tbl <- duckdb::tbl_file(con_memory, "flights.parquet")
+tbl
+class(tbl)
+
+tbl |>
+  count(year, month, day)
+
+tbl |>
+  count(year, month, day) |>
+  filter(month == 1) |>
+  explain()
+```
+
+
+```{r}
+# The future: Register as duckplyr lazy data frame ----
+
+duckplyr_df <- duckplyr::duckplyr_df_from_parquet("flights.parquet")
+class(duckplyr_df)
+
+filtered <-
+  duckplyr_df |>
+  count(year, month, day) |>
+  filter(month == 1)
+
+filtered |>
+  explain()
+
+filtered
+
+filtered |>
+  explain()
+
+duckplyr_df |>
+  count(year, month, day) |>
+  filter(month == 1L) |>
+  explain()
+```
+
+
+```{r}
+# Create partitioned data ------------------------------------------------------------------
+
+arrow::write_dataset(
+  nycflights13::flights,
+  "flights-part/",
+  partitioning = c("year", "month")
+)
+
+fs::dir_tree("flights-part")
+```
+
+
+```{r}
+# Read partitioned data ------------------------------------------------------------------
+
+tbl_part <- duckdb::tbl_query(
+  con_memory,
+  "read_parquet('flights-part/*/*/*.parquet', hive_partitioning = true)"
+)
+tbl_part
+class(tbl_part)
+
+tbl_part |>
+  count(year, month, day)
+
+tbl_part |>
+  filter(month %in% 1:3) |>
+  explain()
+```
+
+
+```{r}
+# Create CSV data ------------------------------------------------------------------------
+
+readr::write_csv(nycflights13::flights, "flights.csv")
+```
+
+
+```{r}
+# Read CSV data --------------------------------------------------------------------------
+
+tbl_csv <- duckdb::tbl_file(con_memory, "flights.csv")
+
+tbl_csv |>
+  count(year, month, day)
+
+tbl_csv |>
+  count(year, month, day) |>
+  explain()
+
+duckplyr_df_csv <- duckplyr::duckplyr_df_from_csv("flights.csv")
+
+duckplyr_df_csv |>
+  count(year, month, day)
+
+duckplyr_df_csv |>
+  count(year, month, day) |>
+  explain()
+```
+
+
+```{r}
+# Create derived Parquet data with duckplyr ---------------------------------------------------------
+
+duckplyr_df_csv |>
+  count(year, month, day) |>
+  duckplyr::df_to_parquet("flights-count.parquet")
+
+fs::file_size("flights-count.parquet")
+
+duckplyr_df_count <-
+  duckplyr::duckplyr_df_from_parquet("flights-count.parquet")
+
+duckplyr_df_count |>
+  explain()
+
+duckplyr_df_count
+
+duckplyr_df_count |>
+  explain()
+```
+
+
+### Exercises
+
+```{r}
+# Exercises -------------------------------------------------------------------------
+
+arrow::write_parquet(nycflights13::flights, "flights.parquet")
+
+# 1. From the Parquet file, compute a lazy dbplyr tables
+#    showing the mean and median departure delay
+#    for each month.
+
+con <- dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+
+flights <- duckdb::tbl_file(con, "flights.parquet")
+
+month_delay <-
+  flights |>
+  summarise(
+    .by = month,
+    mean_delay = mean(dep_delay),
+    median_delay = median(dep_delay)
+  )
+
+month_delay
+
+# 2. Compute the same data as duckplyr lazy data frames.
+
+nycflights13::flights |>
+  select(month, dep_delay) |>
+  duckplyr::as_duckplyr_df() |>
+  summarise(
+    .by = month,
+    mean_delay = mean(dep_delay),
+    median_delay = median(dep_delay)
+  )
+
+# 3. Store this data as a Parquet file.
+
+nycflights13::flights |>
+  select(month, dep_delay) |>
+  duckplyr::as_duckplyr_df() |>
+  summarise(
+    .by = month,
+    mean_delay = mean(dep_delay),
+    median_delay = median(dep_delay),
+  ) |>
+  duckplyr::df_to_parquet("delay-by-month.parquet")
+
+# 4. Read the Parquet file and plot the data.
+
+library(ggplot2)
+
+duckplyr::duckplyr_df_from_parquet("delay-by-month.parquet") |>
+  pivot_longer(cols = c(mean_delay, median_delay), names_to = "delay_type", values_to = "delay") |>
+  ggplot(aes(x = month, y = delay, color = delay_type)) +
+  geom_point() +
+  geom_line() +
+  labs(title = "Mean delay by month")
+
+
+```
+
