@@ -1,0 +1,362 @@
+---
+format:
+  pdf:
+    number-sections: true
+    # highlight-style: pygments
+    highlight-style: files/mcshanepdf.theme
+    fontsize: 11pt
+    fig-pos: 'H'
+    block-headings: false
+    colorlinks: true
+    shift-heading-level-by: 0
+    geometry: 
+      - top=1in
+      - bottom=1in
+      - left=1in
+      - right=1in
+    include-in-header:
+      text: |
+        \usepackage{fancyhdr, bm}
+        \addtokomafont{disposition}{\rmfamily}
+        \setcounter{section}{1}
+        \lhead{ STAT2/37815 \\ Dr. McShane }
+        <!-- \rhead{ YOUR NAME HERE \\ Due May 9th at 5pm } -->
+        \chead{\textbf{\Large IMDB}}
+        \definecolor{codegray}{HTML}{f9f9f9}
+        \definecolor{codeletter}{HTML}{002c6b}
+        \let\textttOrig\texttt
+        \renewcommand{\texttt}[1]{\textttOrig{\textbf{\textcolor{codeletter}{\colorbox{codegray}{#1}}}}}
+        \definecolor{indigo}{RGB}{75, 0, 130}
+        \definecolor{darkgreen}{RGB}{0, 128, 0}
+crossref: 
+  sec-prefix: Problem   # default is Section
+---
+
+\thispagestyle{fancy}
+
+```{r setup, include = FALSE}
+# Load necessary packages
+# library(kableExtra)
+library(formatR)
+
+# Quarto options
+knitr::opts_chunk$set(
+  tidy = FALSE,     # display code as typed
+  size = "small",    # slightly smaller font for code
+  fig.width = 4,
+  fig.height = 2.5,
+  fig.align = "center", 
+  cache = TRUE
+)
+ggplot2::theme_set(ggplot2::theme_bw())
+ 
+# Makes kable table nice just by adding `|> kable()` to a table
+# Use `escape = FALSE` to use LaTeX inside of a table
+# kable = function(x, booktabs = TRUE, align = "c", format, digits = getOption("digits"), row.names = NA, col.names = NA, caption = NULL, label = NULL, format.args = list(), escape = TRUE, full_width = NULL, bootstrap_options = "basic", position = "center", latex_options = c("HOLD_position", "repeat_headers"), font_size = NULL, row_label_position = "l", ...) {
+#   knitr::kable(x, booktabs = booktabs, align = align, format = format, digits = digits, row.names = row.names, col.names = col.names, caption = caption, label = label, format.args = format.args, escape = escape, ...) |>
+#     kableExtra::kable_styling(full_width = full_width, bootstrap_options = bootstrap_options, position = position, latex_options = latex_options, font_size = font_size, row_label_position = row_label_position, ...)
+# }
+```
+
+```{r DrM_Funks, echo = FALSE}
+# Dr. McShane's functions
+# ...
+```
+
+
+\newcommand{\ansbegin}{ \color{blue}\smallbreak\vspace{-8pt}\hrulefill \smallbreak\noindent}
+\newcommand{\ansend}{\smallbreak\vspace{-8pt}\hrulefill \smallbreak\vspace{-8pt} \color{black} }
+
+<!-- \Large \textbf{FOR THE ENTIRETY OF THIS ASSIGNMENT, DO NOT LOAD A PACKAGE.}  \normalsize _These are the only packages you should need to get started:_. -->
+
+```{r libs, message = FALSE}
+library(tidyverse)
+# library(dm)
+# library(DiagrammeR)
+# library(RSQLite)
+# library(RMariaDB)
+# library(duckdb)
+# library(duckplyr)
+# library(progress)
+# library(pixarfilms)
+# library(nycflights13)
+# library(parquetize)
+```
+
+
+\dotfill
+
+
+<!-- NEW PROBLEM ----------------------------------------------->
+
+
+## Question 10
+
+## Setup
+
+```{r }
+# attach relevant packages
+library(DBI)
+library(duckplyr)
+
+duckplyr_df_csv = duckplyr::duckplyr_df_from_csv(
+  path = "imdb/title.ratings.tsv",
+  options = list(
+    delim = "\t",
+    types = list(data.frame(
+      name = c("tconst", "numVotes"), 
+      value = c("VARCHAR", "INTEGER") 
+    ))
+  )
+)
+
+## create reprex
+## https://github.com/duckdblabs/duckplyr
+
+
+duckplyr_df_csv
+
+```
+
+
+```{r }
+### First steps ################################################################
+
+# Connection -------------------------------------------------------------------
+
+con <- dbConnect(duckdb::duckdb())
+con
+
+# Discover tables --------------------------------------------------------------
+
+dbListTables(con)
+
+# Populate database (normally done by other people) ---------------------------
+
+# Magic: import tables into the database
+dm::copy_dm_to(
+  con,
+  dm::dm_pixarfilms(),
+  set_key_constraints = FALSE,
+  temporary = FALSE
+)
+
+# Discover tables --------------------------------------------------------------
+
+dbListTables(con)
+dbListFields(con, "box_office")
+```
+
+
+## Exercises
+
+```{r }
+con
+```
+
+### 1. List all columns from the `pixar_films` table.
+
+```{r}
+dbListFields(con, "pixar_films")
+```
+
+
+### 2. Review the help for `dbListFields()` and `dbListTables()` and the index on <https://dbi.r-dbi.org/reference/>.
+
+```{r}
+help("dbListFields")
+help("dbListTables")
+browseURL("https://dbi.r-dbi.org/reference/")
+```
+
+
+
+## Question 11
+
+### 
+
+```{r }
+# Discover tables --------------------------------------------------------------
+
+dbListTables(con)
+dbListFields(con, "pixar_films")
+dbListFields(con, "academy")
+
+# Read table -------------------------------------------------------------------
+
+df_pixar_films <- dbReadTable(con, "pixar_films")
+df_pixar_films
+as_tibble(df_pixar_films)
+
+# Execute queries --------------------------------------------------------------
+
+dbGetQuery(con, "SELECT * FROM pixar_films")
+
+# Assign SQL queries to character strings
+sql <- "SELECT * FROM pixar_films WHERE release_date >= '2020-01-01'"
+
+# new in R 4.1: r"()" syntax
+# Kirill has used "" to indicate column names and '' for character strings
+# sql <- r"(SELECT * FROM "pixar_films" WHERE "release_date" >= '2020-01-01')"
+dbGetQuery(con, sql)
+
+# Further pointers -------------------------------------------------------------
+
+# Quoting identifiers
+dbQuoteIdentifier(con, "academy")
+dbQuoteIdentifier(con, "from")
+
+# Quoting literals
+dbQuoteLiteral(con, "Toy Story")
+dbQuoteLiteral(con, as.Date("2020-01-01"))
+
+# Paste queries with glue_sql()
+
+# Parameterized queries
+sql <- "SELECT count(*) FROM pixar_films WHERE release_date >= ?"
+dbGetQuery(con, sql, params = list(as.Date("2020-01-01")))
+
+
+# Incomplete sql query
+# sql <- paste0(
+#   "SELECT * FROM",
+#   dbQuoteIdentifier(con, "academy"), 
+#   " ", 
+#   "pixar_films WHERE release_date >= ?"
+# )
+# 
+# dbGetQuery(
+#   con, 
+#   sql, 
+#   params = list(
+#     c("Won", "Won"), 
+#     c("Animated Feature", "Original Song")
+#   )
+# )
+
+```
+
+
+```{r }
+# Reading tables: Exercises ----------------------------------------------------
+
+con
+# 1. Read the `academy` table.
+# 2. Read all records from the `academy` table that correspond to awards won
+#     - Hint: Use the query "SELECT * FROM academy WHERE status = 'Won'"
+# 3. Use quoting and/or a query parameter to make the previous query more robust.
+#     - Hint: `sql <- paste0("SELECT * FROM academy WHERE ", quoted_column, " = ?")`
+
+
+
+
+```
+
+
+
+<!-- NEW PROBLEM ----------------------------------------------->
+
+## Question 12
+
+## Setup
+
+```{r}
+### Downsizing on the database #################################################
+
+# Connection -------------------------------------------------------------------
+
+con <- DBI::dbConnect(duckdb::duckdb())
+dm::copy_dm_to(con, dm::dm_pixarfilms(), set_key_constraints = FALSE, temporary = FALSE)
+
+# Lazy tables ------------------------------------------------------------------
+
+pixar_films <- tbl(con, "pixar_films")
+pixar_films
+
+# Get all data ----
+
+df_pixar_films <-
+  pixar_films |>
+  collect()
+df_pixar_films
+
+# Get first 10 rows
+pixar_films |>
+  collect(n = 10)
+
+# Get first 10 rows
+pixar_films |>
+  slice_sample(n = 10)
+
+# Why does this work? Show_query helps
+pixar_films |> 
+  head() |>
+  show_query()
+
+# setting a seed in R session has no effect on database. 
+# Thus, we will need to set a seed in the database
+dbExecute(con, "SELECT setseed(.42)")
+
+pixar_films |>
+  slice_sample(n = 10) |> 
+  show_query()
+```
+
+
+```{r}
+# Projection (column selection)  -----------------------------------------------
+
+pixar_films |>
+  select(1:3)
+
+# Computations happens on the database!
+pixar_films |>
+  select(1:3) |>
+  show_query()
+
+# Bring the data into the R session
+df_pixar_films_3 <-
+  pixar_films |>
+  select(1:3) |>
+  collect()
+df_pixar_films_3
+
+# Immutable data: original data unchanged
+pixar_films |>
+  collect()
+
+# regex can work 
+pixar_films |> 
+  filter(grepl("^Toy ", film)) |> 
+  collect()
+
+# Hypothetically, if it didn't, just modify the data frame in R
+pixar_films |> 
+  collect() |>
+  filter(grepl("^Toy ", film))
+
+```
+
+
+```{r}
+# Filtering (row selection)  ---------------------------------------------------
+
+pixar_films |>
+  filter(release_date >= "2020-01-01")
+
+# Computations happens on the database!
+pixar_films |>
+  filter(release_date >= "2020-01-01") |>
+  show_query()
+
+# Bring the data into the R session
+df_pixar_films_202x <-
+  pixar_films |>
+  filter(release_date >= "2020-01-01") |>
+  collect()
+df_pixar_films_202x
+
+# Immutable data: original data unchanged
+pixar_films |>
+  collect()
+```
